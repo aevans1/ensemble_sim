@@ -3,19 +3,19 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 import equinox as eqx
 import equinox.internal as eqxi
 
+import cryojax as cx
 import cryojax.simulator as cxs
 from cryojax.io import read_atoms_from_pdb
 from cryojax.image.operators import FourierGaussian
 from cryojax.rotations import SO3
+from cryojax import get_filter_spec
 
 import logging
-import os
 
-from jax.lib import xla_bridge
 from jax.extend import backend
 print("Device : ", backend.get_backend().platform)
 
@@ -23,10 +23,48 @@ print("Device : ", backend.get_backend().platform)
 from jax import config
 config.update("jax_enable_x64", True)
 
-def simulate_image(key, args):
+def build_image_formation_stuff(config):
+    box_size = config["box_size"]
+    pixel_size = config["pixel_size"]
+    pdb_fnames = config["models_fnames"]
+    path_to_models = config["path_to_models"]
+    weights = jnp.array(config['weights_models'])
+    
+    logging.info("Generating potentials...")
+    potential_integrator = cxs.GaussianMixtureProjection()
+    potentials = []
+    for i in range(len(pdb_fnames)):
+        filename = path_to_models + "/" + pdb_fnames[i]
+        atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
+            filename, assemble=False, get_b_factors=True
+        )
+        atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
+        potentials.append(atomic_potential)
+    potentials = tuple(potentials)
+    logging.info("...Potentials generated")
+    
 
+    instrument_config = cxs.InstrumentConfig(
+        shape=(box_size, box_size),
+        pixel_size=pixel_size,
+        voltage_in_kilovolts=300.0,
+        pad_scale=1.0,
+    )
+    args = {}
+    args["instrument_config"] = instrument_config
+    args["potentials"] = potentials
+    args["potential_integrator"] = potential_integrator
+    args["weights"] = weights
+    return  args
+
+
+@partial(eqx.filter_vmap, in_axes=(0, None), out_axes=eqxi.if_mapped(axis=0))
+def make_imaging_pipeline(key, args):
     ## extract arguments
-    instrument_config, potentials, potential_integrator, weights = args
+    instrument_config = args["instrument_config"]
+    potentials = args["potentials"]
+    potential_integrator = args["potential_integrator"]
+    weights = args["weights"]
 
     ## Key generation for imaging parameters
     # Rotation
@@ -37,12 +75,12 @@ def simulate_image(key, args):
     key, subkey = jax.random.split(key)
     ny, nx = instrument_config.shape
     in_plane_offset_in_angstroms = (
-        jax.random.uniform(subkey, (2,), minval=0, maxval=0) # maximum change is in a radius of 0.2 * box length
+        jax.random.uniform(subkey, (2,), minval=0, maxval=0.1)
         * jnp.asarray((nx, ny))
         * instrument_config.pixel_size
     )
    
-    # Convert 2D in-plane translation to 3D, set out-ou-plane translation to 0
+    # Convert 2D in-plane translation to 3D, set out-of-plane translation to 0
     offset_in_angstroms = jnp.pad(in_plane_offset_in_angstroms, ((0, 1),))
 
     # Build the pose
@@ -55,7 +93,7 @@ def simulate_image(key, args):
     defocus_in_angstroms = jax.random.uniform(
         subkey,
         (),
-        minval=10000, # change to prefered values
+        minval=10000,
         maxval=15000,
     )
     
@@ -131,75 +169,56 @@ def simulate_image(key, args):
         instrument_config, scattering_theory
     )
 
-    return imaging_pipeline.render(), structure_id 
+    return imaging_pipeline 
 
-# NOTE: From https://github.com/DSilva27/cryo_MD/blob/before_cryojax/src/cryo_md/_simulator/noise_utils.py 
-def add_noise_(image, random_key, noise_grid, noise_radius_mask, noise_snr):
+
+def compute_image_stack_with_noise(key, config, imaging_pipeline, noise_args):
+    # Define what we vmap over
+    filter_spec = _get_imaging_pipeline_filter_spec(imaging_pipeline)
+
+    # Compute clean images, with fancy vmapping
+    @partial(cx.filter_vmap_with_spec, filter_spec=filter_spec)
+    def compute_image_stack(imaging_pipeline): 
+        return imaging_pipeline.render()
+    images = compute_image_stack(imaging_pipeline) 
+
+    # Add noise to images
+    key, *subkeys = jax.random.split(key, config["number_of_images"] + 1)
+    subkeys = jnp.array(subkeys)
+    noised_images, noise_power_sq = add_noise_(images, subkeys, noise_args)
+    
+    return noised_images, noise_power_sq
+
+
+@partial(eqx.filter_vmap, in_axes=(0, 0, None), out_axes=eqxi.if_mapped(axis=0))
+def add_noise_(image, key, noise_args):
+    noise_grid, noise_radius_mask, noise_snr = noise_args
+    key, subkey = jax.random.split(key)
     radii_for_mask = noise_grid[None, :] ** 2 + noise_grid[:, None] ** 2
     mask = radii_for_mask < noise_radius_mask**2
 
     signal_power = jnp.sqrt(jnp.sum((image * mask) ** 2) / jnp.sum(mask))
 
     noise_power = signal_power / jnp.sqrt(noise_snr)
-    image = image + jax.random.normal(random_key, shape=image.shape) * noise_power
+    image = image + jax.random.normal(subkey, shape=image.shape) * noise_power
     return image, noise_power**2
 
-# NOTE: for now, unsure of exactly how to extract structure_id or conformation from the simulation objects, so just returning it alongside images for now
-def simulate_dataset(config: dict, weights=None):
-
-    box_size = config["box_size"]
-    pixel_size = config["pixel_size"]
-    pdb_fnames = config["models_fnames"]
-    path_to_models = config["path_to_models"]
-
-    if weights is None:
-        weights = jnp.array(config['weights_models'])
-    rng_seed = config["rng_seed"] 
-    number_of_images = config["number_of_images"]
-
-    logging.info("Generating potentials...")
-    potential_integrator = cxs.GaussianMixtureProjection()
-    potentials = []
-    for i in range(len(pdb_fnames)):
-        filename = path_to_models + "/" + pdb_fnames[i]
-        atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename, assemble=False, get_b_factors=True
-        )
-        atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
-        potentials.append(atomic_potential)
-    potentials = tuple(potentials)
-    logging.info("...Potentials generated")
-
-    instrument_config = cxs.InstrumentConfig(
-        shape=(box_size, box_size),
-        pixel_size=pixel_size,
-        voltage_in_kilovolts=300.0,
-        pad_scale=1.0,
+def _pointer_to_vmapped_parameters(imaging_pipeline):
+    output = (
+        imaging_pipeline.scattering_theory.transfer_theory.ctf.defocus_in_angstroms,
+        imaging_pipeline.scattering_theory.transfer_theory.ctf.astigmatism_in_angstroms,
+        imaging_pipeline.scattering_theory.transfer_theory.ctf.astigmatism_angle,
+        imaging_pipeline.scattering_theory.transfer_theory.ctf.phase_shift,
+        imaging_pipeline.scattering_theory.transfer_theory.envelope.b_factor,
+        imaging_pipeline.scattering_theory.structural_ensemble.pose.offset_x_in_angstroms,
+        imaging_pipeline.scattering_theory.structural_ensemble.pose.offset_y_in_angstroms,
+        imaging_pipeline.scattering_theory.structural_ensemble.pose.view_phi,
+        imaging_pipeline.scattering_theory.structural_ensemble.pose.view_theta,
+        imaging_pipeline.scattering_theory.structural_ensemble.pose.view_psi,
+        imaging_pipeline.scattering_theory.structural_ensemble.conformation
     )
-    noise_grid = jnp.linspace(
-          -0.5 * (box_size - 1),
-          0.5 * (box_size - 1),
-          box_size,
-      )
-    args = (instrument_config, potentials, potential_integrator, weights)
-    
-    key = jax.random.PRNGKey(rng_seed)
-    key, *subkeys = jax.random.split(key, number_of_images + 1)
-    subkeys = jnp.array(subkeys)
-    
-    logging.info("Generating clean images...")
-    images, structure_id  = jax.lax.map(lambda x: simulate_image(x, args), xs=subkeys)
-    logging.info("...clean images generated")
+    return output
 
-    noise_radius = 0.5*box_size - 1 # For now, using a disc that is radius of the image for SNR calculations
-    noise_args = noise_grid, noise_radius, config["noise_snr"] 
-    key, *subkeys = jax.random.split(jax.random.key(rng_seed), number_of_images+1)
-    subkeys = jnp.array(subkeys)
-    
-    logging.info("Adding noise to images...")
-    noised_images, noise_power_sq = jax.lax.map(lambda x: add_noise_(*x, *noise_args), xs=(images, subkeys))
-    logging.info("...images are noised")
 
-    logging.info("Returning images and structure labels all at once, until I figure out how to do it smarter!")
-    return noised_images, structure_id
-
+def _get_imaging_pipeline_filter_spec(imaging_pipeline):
+    return get_filter_spec(imaging_pipeline, _pointer_to_vmapped_parameters)
