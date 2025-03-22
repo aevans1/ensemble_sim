@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "src/ensemble_sim",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/ensemble_sim",
+]
+[project]
+authors = [
+   { name = "Luke Evans", email = "levans@flatironinstitute.org"}
+]
+name = "ensemble_sim"
+version = "0.0.1"
+dependencies = [
+    "numpy",
+    "numpyro",
+    "equinox",
+    "logging",
+    "jax",
+    "cryojax",
+    "matplotlib"
+]
