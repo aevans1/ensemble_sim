@@ -58,7 +58,7 @@ def build_image_formation_stuff(config):
     return  args
 
 
-@partial(eqx.filter_vmap, in_axes=(0, None), out_axes=eqxi.if_mapped(axis=0))
+@partial(eqx.filter_vmap, in_axes=(0, None), out_axes=(0, None))
 def make_imaging_pipeline(key, args):
     ## extract arguments
     instrument_config = args["instrument_config"]
@@ -169,7 +169,11 @@ def make_imaging_pipeline(key, args):
         instrument_config, scattering_theory
     )
 
-    return imaging_pipeline 
+    filter_spec = _get_imaging_pipeline_filter_spec(imaging_pipeline)
+    imaging_pipeline_vmap, imaging_pipeline_novmap = eqx.partition(
+        imaging_pipeline, filter_spec)
+    
+    return imaging_pipeline_vmap, imaging_pipeline_novmap
 
 
 def compute_image_stack_with_noise(key, config, imaging_pipeline, noise_args):
@@ -190,7 +194,7 @@ def compute_image_stack_with_noise(key, config, imaging_pipeline, noise_args):
     return noised_images, noise_power_sq
 
 
-@partial(eqx.filter_vmap, in_axes=(0, 0, None), out_axes=eqxi.if_mapped(axis=0))
+@partial(jax.vmap, in_axes=(0, 0, None), out_axes=0)
 def add_noise_(image, key, noise_args):
     noise_grid, noise_radius_mask, noise_snr = noise_args
     key, subkey = jax.random.split(key)
