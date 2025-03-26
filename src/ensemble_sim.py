@@ -10,7 +10,7 @@ import cryojax.simulator as cxs
 from cryojax.io import read_atoms_from_pdb_or_cif
 from cryojax.image.operators import FourierGaussian
 from cryojax.rotations import SO3
-from cryojax import get_filter_spec
+from cryojax.utils import get_filter_spec
 
 import logging
 
