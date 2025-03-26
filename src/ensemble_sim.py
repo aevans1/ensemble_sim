@@ -33,7 +33,7 @@ def build_image_formation_stuff(config):
     potentials = []
     for i in range(len(pdb_fnames)):
         filename = path_to_models + "/" + pdb_fnames[i]
-        atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
+        atom_positions, atom_identities, b_factors = read_atoms_from_pdb_or_cif(
             filename, assemble=False, get_b_factors=True
         )
         atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
