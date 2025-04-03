@@ -7,10 +7,11 @@ import equinox.internal as eqxi
 
 import cryojax as cx
 import cryojax.simulator as cxs
-from cryojax.io import read_atoms_from_pdb_or_cif
+from cryojax.io import read_atoms_from_pdb
 from cryojax.image.operators import FourierGaussian
 from cryojax.rotations import SO3
 from cryojax.utils import get_filter_spec
+from cryojax.utils._filtered_transformations import filter_vmap_with_spec
 
 import logging
 
@@ -22,8 +23,6 @@ from jax import config
 config.update("jax_enable_x64", True)
 
 def build_image_formation_stuff(config):
-    box_size = config["box_size"]
-    pixel_size = config["pixel_size"]
     pdb_fnames = config["models_fnames"]
     path_to_models = config["path_to_models"]
     weights = jnp.array(config['weights_models'])
@@ -33,21 +32,16 @@ def build_image_formation_stuff(config):
     potentials = []
     for i in range(len(pdb_fnames)):
         filename = path_to_models + "/" + pdb_fnames[i]
-        atom_positions, atom_identities, b_factors = read_atoms_from_pdb_or_cif(
-            filename, assemble=False, get_b_factors=True
+        atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
+            filename,get_b_factors=True
         )
         atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
         potentials.append(atomic_potential)
     potentials = tuple(potentials)
     logging.info("...Potentials generated")
     
-
-    instrument_config = cxs.InstrumentConfig(
-        shape=(box_size, box_size),
-        pixel_size=pixel_size,
-        voltage_in_kilovolts=300.0,
-        pad_scale=1.0,
-    )
+    instrument_config = instrument_config_from_params(config)
+    
     args = {}
     args["instrument_config"] = instrument_config
     args["potentials"] = potentials
@@ -55,6 +49,17 @@ def build_image_formation_stuff(config):
     args["weights"] = weights
     return  args
 
+def instrument_config_from_params(config):
+    box_size = config["box_size"]
+    pixel_size = config["pixel_size"]
+
+    instrument_config = cxs.InstrumentConfig(
+        shape=(box_size, box_size),
+        pixel_size=pixel_size,
+        voltage_in_kilovolts=300.0,
+        pad_scale=1.0,
+    )
+    return instrument_config
 
 @partial(eqx.filter_vmap, in_axes=(0, None), out_axes=(0, None))
 def make_imaging_pipeline(key, args):
@@ -180,7 +185,7 @@ def compute_image_stack_with_noise(key, config, imaging_pipeline, noise_args):
     filter_spec = _get_imaging_pipeline_filter_spec(imaging_pipeline)
 
     # Compute clean images, with fancy vmapping
-    @partial(cx.filter_vmap_with_spec, filter_spec=filter_spec)
+    @partial(filter_vmap_with_spec, filter_spec=filter_spec)
     def compute_image_stack(imaging_pipeline): 
         return imaging_pipeline.render()
     images = compute_image_stack(imaging_pipeline) 
