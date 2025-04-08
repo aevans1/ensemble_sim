@@ -26,17 +26,30 @@ def build_image_formation_stuff(config):
     pdb_fnames = config["models_fnames"]
     path_to_models = config["path_to_models"]
     weights = jnp.array(config['weights_models'])
-    
+    box_size = config["box_size"]
+    voxel_size = config["pixel_size"]
+
     logging.info("Generating potentials...")
     potential_integrator = cxs.GaussianMixtureProjection()
     potentials = []
     for i in range(len(pdb_fnames)):
+
+        # Load atomic structure and transform into a potential
         filename = path_to_models + "/" + pdb_fnames[i]
         atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
             filename,get_b_factors=True
         )
         atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
-        potentials.append(atomic_potential)
+        
+        # Convert to a real voxel grid 
+        real_voxel_grid = atomic_potential.as_real_voxel_grid(
+        shape=(box_size, box_size, box_size), voxel_size=voxel_size
+    )
+        potential = cxs.FourierVoxelGridPotential.from_real_voxel_grid(
+        real_voxel_grid, voxel_size, pad_scale=2
+    )
+
+        potentials.append(potential)
     potentials = tuple(potentials)
     logging.info("...Potentials generated")
     
@@ -230,3 +243,19 @@ def _pointer_to_vmapped_parameters(imaging_pipeline):
 
 def _get_imaging_pipeline_filter_spec(imaging_pipeline):
     return get_filter_spec(imaging_pipeline, _pointer_to_vmapped_parameters)
+
+def _get_parameters_filter_spec(parameters):
+    return get_filter_spec(parameters, _pointer_to_vmapped_parameters)
+
+def _pointer_to_vmapped_parameters(parameters):
+    output = (
+        parameters.transfer_theory.ctf.defocus_in_angstroms,
+        parameters.transfer_theory.ctf.astigmatism_in_angstroms,
+        parameters.transfer_theory.ctf.astigmatism_angle,
+        parameters.transfer_theory.ctf.phase_shift,
+        parameters.transfer_theory.envelope.b_factor,
+        parameters.transfer_theory.envelope.amplitude,
+        parameters.pose
+    )
+    return output
+
