@@ -17,6 +17,7 @@ from cryojax.image import operators as op
 import cryojax.simulator as cxs
 
 
+#### Imaging Functions
 @partial(eqx.filter_vmap, in_axes=(0, None), out_axes=eqx.if_array(0))
 def make_particle_parameters(
     key: PRNGKeyArray, instrument_config: cxs.InstrumentConfig
@@ -223,6 +224,8 @@ def compute_image_with_noise(
     )
     return distribution.sample(key_noise)
 
+
+#### Likelihood Functions
 class CustomJaxDataset(jdl.Dataset):
     def __init__(self, cryojax_dataset: RelionParticleStackReader):
         self.cryojax_dataset = cryojax_dataset
