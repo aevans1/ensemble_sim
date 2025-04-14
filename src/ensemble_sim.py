@@ -1,232 +1,213 @@
+import jax.numpy as jnp
+import jax
+import equinox as eqx
+from jaxtyping import PRNGKeyArray
+from typing import Any
+
 from functools import partial
 
-import jax
-import jax.numpy as jnp
-import equinox as eqx
-import equinox.internal as eqxi
-
-import cryojax as cx
-import cryojax.simulator as cxs
-from cryojax.io import read_atoms_from_pdb
-from cryojax.image.operators import FourierGaussian
+from cryojax.data import RelionParticleParameters
 from cryojax.rotations import SO3
-from cryojax.utils import get_filter_spec
-from cryojax.utils._filtered_transformations import filter_vmap_with_spec
+from cryojax.inference import distributions as dist
+from cryojax.image.operators import CircularCosineMask
+from cryojax.image import operators as op
+import cryojax.simulator as cxs
 
-import logging
 
-from jax.extend import backend
-print("Device : ", backend.get_backend().platform)
+@partial(eqx.filter_vmap, in_axes=(0, None), out_axes=eqx.if_array(0))
+def make_particle_parameters(
+    key: PRNGKeyArray, instrument_config: cxs.InstrumentConfig
+) -> RelionParticleParameters:
+    """
+    Takes an instrument_config and generates transfer theory and pose
+    i.e, all things needed to simulate images and store info on them 
 
-# enable 16 bit precision for jax
-from jax import config
-config.update("jax_enable_x64", True)
+    From the cryojax tutorial for generating ensembles of images.
 
-def build_image_formation_stuff(config):
-    pdb_fnames = config["models_fnames"]
-    path_to_models = config["path_to_models"]
-    weights = jnp.array(config['weights_models'])
-    
-    logging.info("Generating potentials...")
-    potential_integrator = cxs.GaussianMixtureProjection()
-    potentials = []
-    for i in range(len(pdb_fnames)):
-        filename = path_to_models + "/" + pdb_fnames[i]
-        atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename,get_b_factors=True
-        )
-        atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
-        potentials.append(atomic_potential)
-    potentials = tuple(potentials)
-    logging.info("...Potentials generated")
-    
-    instrument_config = instrument_config_from_params(config)
-    
-    args = {}
-    args["instrument_config"] = instrument_config
-    args["potentials"] = potentials
-    args["potential_integrator"] = potential_integrator
-    args["weights"] = weights
-    return  args
+    Below, many customizable parameters are fixed for simplicity, can be adjusted 
+    """
+    ## Generate random parameters
+    # Pose
+    # ... instantiate rotations
+    key, subkey = jax.random.split(key)  # split the key to use for the next random number
 
-def instrument_config_from_params(config):
-    box_size = config["box_size"]
-    pixel_size = config["pixel_size"]
-
-    instrument_config = cxs.InstrumentConfig(
-        shape=(box_size, box_size),
-        pixel_size=pixel_size,
-        voltage_in_kilovolts=300.0,
-        pad_scale=1.0,
-    )
-    return instrument_config
-
-@partial(eqx.filter_vmap, in_axes=(0, None), out_axes=(0, None))
-def make_imaging_pipeline(key, args):
-    ## extract arguments
-    instrument_config = args["instrument_config"]
-    potentials = args["potentials"]
-    potential_integrator = args["potential_integrator"]
-    weights = args["weights"]
-
-    ## Key generation for imaging parameters
-    # Rotation
-    key, subkey = jax.random.split(key)  
     rotation = SO3.sample_uniform(subkey)
+    key, subkey = jax.random.split(key)  # do this everytime you use a key!!
 
-    # Translation
-    key, subkey = jax.random.split(key)
+    # ... now in-plane translation
     ny, nx = instrument_config.shape
-    in_plane_offset_in_angstroms = (
+    offset_in_angstroms = (
         jax.random.uniform(subkey, (2,), minval=0, maxval=0.1)
         * jnp.asarray((nx, ny))
         * instrument_config.pixel_size
     )
-   
-    # Convert 2D in-plane translation to 3D, set out-of-plane translation to 0
-    offset_in_angstroms = jnp.pad(in_plane_offset_in_angstroms, ((0, 1),))
+    # ... build the pose
+    pose = cxs.EulerAnglePose.from_rotation_and_translation(rotation, offset_in_angstroms)
 
-    # Build the pose
-    pose = cxs.EulerAnglePose.from_rotation_and_translation(
-        rotation, offset_in_angstroms
-    )
+    # CTF Parameters
+    # ... defocus
+    defocus_in_angstroms = jax.random.uniform(subkey, (), minval=10000, maxval=15000)
+    key, subkey = jax.random.split(key)
 
-    # defocus
+    astigmatism_in_angstroms = jax.random.uniform(subkey, (), minval=0, maxval=100)
     key, subkey = jax.random.split(key)
-    defocus_in_angstroms = jax.random.uniform(
-        subkey,
-        (),
-        minval=10000,
-        maxval=15000,
-    )
-    
-    # astigmatism
-    key, subkey = jax.random.split(key)
-    astigmatism_in_angstroms = jax.random.uniform(
-        subkey,
-        (),
-        minval=0,
-        maxval=100,
-    )
-    key, subkey = jax.random.split(key)
-    astigmatism_angle = jax.random.uniform(
-        subkey,
-        (),
-        minval=0,
-        maxval=jnp.pi,
-    )
-    
-    # phase shift
-    key, subkey = jax.random.split(key)
-    phase_shift = jax.random.uniform(
-        subkey, 
-        (), 
-        minval=0, 
-        maxval=jnp.pi
-    )
-    
-    # b_factor
-    key, subkey = jax.random.split(key)
-    b_factor = jax.random.uniform(
-        subkey,
-        (),
-        minval=0, # For now, no b-factor
-        maxval=0
-    )
 
-    # Various other ctf-y things
+    astigmatism_angle = jax.random.uniform(subkey, (), minval=0, maxval=jnp.pi)
+    key, subkey = jax.random.split(key)
+
+    phase_shift = jax.random.uniform(subkey, (), minval=0, maxval=0)
+    # no more random numbers needed
+
+    # now generate your non-random values
     spherical_aberration_in_mm = 2.7
     amplitude_contrast_ratio = 0.1
+    b_factor = 0.0
     ctf_scale_factor = 1.0
 
-    ## Build the CTF
+    # ... build the CTF
     transfer_theory = cxs.ContrastTransferTheory(
         ctf=cxs.ContrastTransferFunction(
             defocus_in_angstroms=defocus_in_angstroms,
             astigmatism_in_angstroms=astigmatism_in_angstroms,
             astigmatism_angle=astigmatism_angle,
             spherical_aberration_in_mm=spherical_aberration_in_mm,
-            amplitude_contrast_ratio=amplitude_contrast_ratio,
-            phase_shift=phase_shift,
-        ),
-        envelope=FourierGaussian(b_factor=b_factor, amplitude=ctf_scale_factor),
+                    ),
+        envelope=op.FourierGaussian(b_factor=b_factor, amplitude=ctf_scale_factor),
+        amplitude_contrast_ratio=amplitude_contrast_ratio,
+        phase_shift=phase_shift,
     )
 
-    ## Sample from potentials
+    particle_parameters = RelionParticleParameters(
+        instrument_config=instrument_config,
+        pose=pose,
+        transfer_theory=transfer_theory,
+    )
+
+    return particle_parameters
+
+
+def build_distribution_from_particle_parameters(
+    key: PRNGKeyArray,
+    particle_parameters: RelionParticleParameters,
+    args: Any,
+) -> cxs.ContrastImageModel:
+    """
+    Takes generated particle parameters and generates a white noise Distribution,
+    from which one can generate noisy or clean images, or compute likelihoods of images 
+
+    From the cryojax tutorial for generating ensembles of images.
+    """
+    potentials, potential_integrator, structural_weights, variance = args
+
     key, subkey = jax.random.split(key)
-    structure_id = jax.random.choice(subkey, weights.shape[0], p=weights)
-    
+    potential_id = jax.random.choice(
+        subkey, structural_weights.shape[0], p=structural_weights
+    )
+
     structural_ensemble = cxs.DiscreteStructuralEnsemble(
         potentials,
-        pose,
-        cxs.DiscreteConformationalVariable(structure_id),
+        particle_parameters.pose,
+        cxs.DiscreteConformationalVariable(potential_id),
     )
 
     scattering_theory = cxs.WeakPhaseScatteringTheory(
         structural_ensemble,
         potential_integrator,
-        transfer_theory,
+        particle_parameters.transfer_theory,
     )
-
-    imaging_pipeline = cxs.ContrastImagingPipeline(
-        instrument_config, scattering_theory
+    imaging_pipeline = cxs.ContrastImageModel(
+        particle_parameters.instrument_config, scattering_theory
     )
+    distribution = dist.IndependentGaussianPixels(
+        imaging_pipeline,
+        variance=variance,
+    )
+    return distribution
+
+@eqx.filter_jit
+@partial(eqx.filter_vmap, in_axes=(0, eqx.if_array(0), None))
+def simulate_noiseless_images(key, particle_parameters, args):
+    """
+    Takes generated particle parameters,generates a white noise Distribution,
+    and then simulates noiseless images from them.
+
+    From the cryojax tutorial for generating ensembles of images.
+    """
+    distribution = build_distribution_from_particle_parameters(
+        key, particle_parameters, args
+    )
+    return distribution.compute_signal()
+
+
+@eqx.filter_jit
+def estimate_signal_variance(
+    key, n_images_for_estimation, mask_radius, instrument_config, args, *, batch_size=None
+):
+    """
+    Estimates the "signal" of signal-to-noise for images generated according input param specification
     
-    # Define what we want to vmap over
-    filter_spec = _get_imaging_pipeline_filter_spec(imaging_pipeline)
-    imaging_pipeline_vmap, imaging_pipeline_novmap = eqx.partition(
-        imaging_pipeline, filter_spec)
+    Roughly, computes some sample images, takes the average per-image variance of masked images
+
+    From the cryojax tutorial for generating ensembles of images.
+    """
     
-    return imaging_pipeline_vmap, imaging_pipeline_novmap
-
-
-def compute_image_stack_with_noise(key, config, imaging_pipeline, noise_args):
-    # Define what we vmap over
-    filter_spec = _get_imaging_pipeline_filter_spec(imaging_pipeline)
-
-    # Compute clean images, with fancy vmapping
-    @partial(filter_vmap_with_spec, filter_spec=filter_spec)
-    def compute_image_stack(imaging_pipeline): 
-        return imaging_pipeline.render()
-    images = compute_image_stack(imaging_pipeline) 
-
-    # Add noise to images
-    key, *subkeys = jax.random.split(key, config["number_of_images"] + 1)
+    key, *subkeys = jax.random.split(key, n_images_for_estimation + 1)
     subkeys = jnp.array(subkeys)
-    noised_images, noise_power_sq = add_noise_(images, subkeys, noise_args)
-    
-    return noised_images, noise_power_sq
 
+    particle_parameters = make_particle_parameters(subkeys, instrument_config)
 
-@partial(jax.vmap, in_axes=(0, 0, None), out_axes=0)
-def add_noise_(image, key, noise_args):
-    noise_grid, noise_radius_mask, noise_snr = noise_args
-    key, subkey = jax.random.split(key)
-    radii_for_mask = noise_grid[None, :] ** 2 + noise_grid[:, None] ** 2
-    mask = radii_for_mask < noise_radius_mask**2
-
-    signal_power = jnp.sqrt(jnp.sum((image * mask) ** 2) / jnp.sum(mask))
-
-    noise_power = signal_power / jnp.sqrt(noise_snr)
-    image = image + jax.random.normal(subkey, shape=image.shape) * noise_power
-    return image, noise_power**2
-
-def _pointer_to_vmapped_parameters(imaging_pipeline):
-    output = (
-        imaging_pipeline.scattering_theory.transfer_theory.ctf.defocus_in_angstroms,
-        imaging_pipeline.scattering_theory.transfer_theory.ctf.astigmatism_in_angstroms,
-        imaging_pipeline.scattering_theory.transfer_theory.ctf.astigmatism_angle,
-        imaging_pipeline.scattering_theory.transfer_theory.ctf.phase_shift,
-        imaging_pipeline.scattering_theory.transfer_theory.envelope.b_factor,
-        imaging_pipeline.scattering_theory.structural_ensemble.pose.offset_x_in_angstroms,
-        imaging_pipeline.scattering_theory.structural_ensemble.pose.offset_y_in_angstroms,
-        imaging_pipeline.scattering_theory.structural_ensemble.pose.view_phi,
-        imaging_pipeline.scattering_theory.structural_ensemble.pose.view_theta,
-        imaging_pipeline.scattering_theory.structural_ensemble.pose.view_psi,
-        imaging_pipeline.scattering_theory.structural_ensemble.conformation
+    # set offset at 0 for simplicity
+    particle_parameters = eqx.tree_at(
+        lambda d: (d.pose.offset_x_in_angstroms, d.pose.offset_y_in_angstroms),
+        particle_parameters,
+        replace_fn=lambda x: 0.0 * x,
     )
-    return output
+
+    key, *subkeys = jax.random.split(key, n_images_for_estimation + 1)
+    subkeys = jnp.array(subkeys)
+    noiseless_images = simulate_noiseless_images(subkeys, particle_parameters, args)
+
+    # define noise mask
+    mask = CircularCosineMask(
+        particle_parameters.instrument_config.coordinate_grid_in_pixels,
+        radius_in_angstroms_or_pixels=mask_radius,
+        rolloff_width_in_angstroms_or_pixels=1.0,
+    )
+
+    signal_variance = jnp.var(
+        noiseless_images, axis=(1, 2), where=jnp.where(mask.array == 1.0, True, False)
+    ).mean()
+
+    return signal_variance
 
 
-def _get_imaging_pipeline_filter_spec(imaging_pipeline):
-    return get_filter_spec(imaging_pipeline, _pointer_to_vmapped_parameters)
+def compute_image_clean(
+    key: PRNGKeyArray,
+    particle_parameters: RelionParticleParameters,
+    args: Any,
+):
+    """
+    This is the per-image function for generating clean images, which is then vectorized via another function.
+    """
+    _, key_structure = jax.random.split(key)
+    distribution = build_distribution_from_particle_parameters(
+        key_structure, particle_parameters, args
+    )
+    return distribution.compute_signal()
+
+
+def compute_image_with_noise(
+    key: PRNGKeyArray,
+    particle_parameters: RelionParticleParameters,
+    args: Any,
+):
+    """
+    This is the per-image function for generating clean images, which is then vectorized via another function.
+    
+    From the cryojax tutorial for generating ensembles of images.
+    """
+    key_noise, key_structure = jax.random.split(key)
+    distribution = build_distribution_from_particle_parameters(
+        key_structure, particle_parameters, args
+    )
+    return distribution.sample(key_noise)
