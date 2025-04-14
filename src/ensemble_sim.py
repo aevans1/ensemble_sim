@@ -2,14 +2,11 @@ import jax.numpy as jnp
 import jax
 import equinox as eqx
 from jaxtyping import PRNGKeyArray
-import jax_dataloader as jdl
 from typing import Any
 
-import logging
 from functools import partial
 
-from cryojax.io import read_atoms_from_pdb
-from cryojax.data import RelionParticleStackDataset, ParticleStack, RelionParticleParameters
+from cryojax.data import RelionParticleParameters
 from cryojax.rotations import SO3
 from cryojax.inference import distributions as dist
 from cryojax.image.operators import CircularCosineMask
@@ -17,16 +14,21 @@ from cryojax.image import operators as op
 import cryojax.simulator as cxs
 
 
-#### Imaging Functions
 @partial(eqx.filter_vmap, in_axes=(0, None), out_axes=eqx.if_array(0))
 def make_particle_parameters(
     key: PRNGKeyArray, instrument_config: cxs.InstrumentConfig
 ) -> RelionParticleParameters:
-    # Generate random parameters
+    """
+    Takes an instrument_config and generates transfer theory and pose
+    i.e, all things needed to simulate images and store info on them 
 
+    From the cryojax tutorial for generating ensembles of images.
+
+    Below, many customizable parameters are fixed for simplicity, can be adjusted 
+    """
+    ## Generate random parameters
     # Pose
     # ... instantiate rotations
-
     key, subkey = jax.random.split(key)  # split the key to use for the next random number
 
     rotation = SO3.sample_uniform(subkey)
@@ -83,54 +85,18 @@ def make_particle_parameters(
 
     return particle_parameters
 
-def build_image_formation_stuff(config):
-    pdb_fnames = config["models_fnames"]
-    path_to_models = config["path_to_models"]
-    weights = jnp.array(config['weights_models'])
-    box_size = config["box_size"]
-    voxel_size = config["pixel_size"]
-
-    logging.info("Generating potentials...")
-    potential_integrator = cxs.GaussianMixtureProjection()
-    potentials = []
-    for i in range(len(pdb_fnames)):
-
-        # Load atomic structure and transform into a potential
-        filename = path_to_models + "/" + pdb_fnames[i]
-        atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename, loads_b_factors=True
-        )
-        atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
-        potentials.append(atomic_potential)
-    potentials = tuple(potentials)
-    logging.info("...Potentials generated")
-    
-    instrument_config = instrument_config_from_params(config)
-    
-    args = {}
-    args["instrument_config"] = instrument_config
-    args["potentials"] = potentials
-    args["potential_integrator"] = potential_integrator
-    args["weights"] = weights
-    return  args
-
-def instrument_config_from_params(config):
-    box_size = config["box_size"]
-    pixel_size = config["pixel_size"]
-
-    instrument_config = cxs.InstrumentConfig(
-        shape=(box_size, box_size),
-        pixel_size=pixel_size,
-        voltage_in_kilovolts=300.0,
-        pad_scale=1.0,
-    )
-    return instrument_config
 
 def build_distribution_from_particle_parameters(
     key: PRNGKeyArray,
     particle_parameters: RelionParticleParameters,
     args: Any,
 ) -> cxs.ContrastImageModel:
+    """
+    Takes generated particle parameters and generates a white noise Distribution,
+    from which one can generate noisy or clean images, or compute likelihoods of images 
+
+    From the cryojax tutorial for generating ensembles of images.
+    """
     potentials, potential_integrator, structural_weights, variance = args
 
     key, subkey = jax.random.split(key)
@@ -161,11 +127,15 @@ def build_distribution_from_particle_parameters(
 @eqx.filter_jit
 @partial(eqx.filter_vmap, in_axes=(0, eqx.if_array(0), None))
 def simulate_noiseless_images(key, particle_parameters, args):
+    """
+    Takes generated particle parameters,generates a white noise Distribution,
+    and then simulates noiseless images from them.
+
+    From the cryojax tutorial for generating ensembles of images.
+    """
     distribution = build_distribution_from_particle_parameters(
         key, particle_parameters, args
     )
-
-    distribution
     return distribution.compute_signal()
 
 
@@ -173,6 +143,14 @@ def simulate_noiseless_images(key, particle_parameters, args):
 def estimate_signal_variance(
     key, n_images_for_estimation, mask_radius, instrument_config, args, *, batch_size=None
 ):
+    """
+    Estimates the "signal" of signal-to-noise for images generated according input param specification
+    
+    Roughly, computes some sample images, takes the average per-image variance of masked images
+
+    From the cryojax tutorial for generating ensembles of images.
+    """
+    
     key, *subkeys = jax.random.split(key, n_images_for_estimation + 1)
     subkeys = jnp.array(subkeys)
 
@@ -202,102 +180,34 @@ def estimate_signal_variance(
 
     return signal_variance
 
+
 def compute_image_clean(
     key: PRNGKeyArray,
     particle_parameters: RelionParticleParameters,
     args: Any,
 ):
-    key_noise, key_structure = jax.random.split(key)
+    """
+    This is the per-image function for generating clean images, which is then vectorized via another function.
+    """
+    _, key_structure = jax.random.split(key)
     distribution = build_distribution_from_particle_parameters(
         key_structure, particle_parameters, args
     )
     return distribution.compute_signal()
+
 
 def compute_image_with_noise(
     key: PRNGKeyArray,
     particle_parameters: RelionParticleParameters,
     args: Any,
 ):
+    """
+    This is the per-image function for generating clean images, which is then vectorized via another function.
+    
+    From the cryojax tutorial for generating ensembles of images.
+    """
     key_noise, key_structure = jax.random.split(key)
     distribution = build_distribution_from_particle_parameters(
         key_structure, particle_parameters, args
     )
     return distribution.sample(key_noise)
-
-
-#### Likelihood Functions
-class CustomJaxDataset(jdl.Dataset):
-    def __init__(self, cryojax_dataset: RelionParticleStackDataset):
-        self.cryojax_dataset = cryojax_dataset
-
-    def __getitem__(self, index) -> ParticleStack:
-        return self.cryojax_dataset[index]
-
-    def __len__(self) -> int:
-        return len(self.cryojax_dataset)
-    
-@eqx.filter_jit
-def compute_single_likelihood(
-    potential_id,
-    relion_particle_images_map: ParticleStack,
-    relion_particle_images_nomap: ParticleStack,
-    args: Any,
-) -> cxs.ContrastImageModel:
-    relion_particle_images = eqx.combine(
-        relion_particle_images_map, relion_particle_images_nomap
-    )
-    potentials, potential_integrator, variance = args
-    structural_ensemble = cxs.DiscreteStructuralEnsemble(
-        potentials,
-        relion_particle_images.parameters.pose,
-        cxs.DiscreteConformationalVariable(potential_id),
-    )
-    scattering_theory = cxs.WeakPhaseScatteringTheory(
-        structural_ensemble,
-        potential_integrator,
-        relion_particle_images.parameters.transfer_theory,
-    )
-    imaging_pipeline = cxs.ContrastImageModel(
-        relion_particle_images.parameters.instrument_config, scattering_theory
-    )
-    distribution = dist.IndependentGaussianPixels(
-        imaging_pipeline,
-        variance=variance,
-    )
-    return distribution.log_likelihood(relion_particle_images.images)
-
-
-@eqx.filter_jit
-def compute_likelihood_with_map(
-    potential_id, relion_particle_images, args, *, batch_size_images
-):
-    """
-    Computes one row of the likelihood matrix (all structures, one image)
-    """
-
-    stack_map, stack_nomap = eqx.partition(relion_particle_images, eqx.is_array)
-
-    likelihood_batch = jax.lax.map(
-        lambda x: compute_single_likelihood(potential_id, x, stack_nomap, args),
-        xs=stack_map,
-        batch_size=batch_size_images,  # compute for this many images in parallel
-    )
-    return likelihood_batch
-
-
-def compute_likelihood_matrix_with_lax_map(
-    dataloader, args, *, batch_size_potentials=None, batch_size_images=None
-):
-    n_potentials = len(args[0])
-    likelihood_matrix = []
-    for batch in dataloader:
-        batch_likelihood = jax.lax.map(
-            lambda x: compute_likelihood_with_map(
-                x, batch, args, batch_size_images=batch_size_images
-            ),
-            xs=jnp.arange(n_potentials),
-            batch_size=batch_size_potentials,  # potentials to compute in parallel
-        ).T
-        likelihood_matrix.append(batch_likelihood)
-    likelihood_matrix = jnp.concatenate(likelihood_matrix, axis=0)
-    return likelihood_matrix
