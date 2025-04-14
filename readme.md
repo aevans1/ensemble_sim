@@ -16,7 +16,7 @@ python -m pip install .
 For the source estimation notebook, you will also need the "cryo_reweighting" package, or implement the short functions in there yourself, see [here](https://github.com/Quantitative-Heterogeneity/cryo_reweighting/blob/main/src/cryo_reweighting/optimization.py)
 ```
 git clone https://github.com/Quantitative-Heterogeneity/cryo_reweighting.git
-cd ensemble_sim
+cd cryo_reweighting
 python -m pip install .
 ```
 
