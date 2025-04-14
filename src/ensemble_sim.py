@@ -9,7 +9,7 @@ import logging
 from functools import partial
 
 from cryojax.io import read_atoms_from_pdb
-from cryojax.data import RelionParticleStackReader, ParticleStack, ParticleParameters 
+from cryojax.data import RelionParticleStackDataset, ParticleStack, RelionParticleParameters
 from cryojax.rotations import SO3
 from cryojax.inference import distributions as dist
 from cryojax.image.operators import CircularCosineMask
@@ -21,7 +21,7 @@ import cryojax.simulator as cxs
 @partial(eqx.filter_vmap, in_axes=(0, None), out_axes=eqx.if_array(0))
 def make_particle_parameters(
     key: PRNGKeyArray, instrument_config: cxs.InstrumentConfig
-) -> ParticleParameters:
+) -> RelionParticleParameters:
     # Generate random parameters
 
     # Pose
@@ -69,13 +69,13 @@ def make_particle_parameters(
             astigmatism_in_angstroms=astigmatism_in_angstroms,
             astigmatism_angle=astigmatism_angle,
             spherical_aberration_in_mm=spherical_aberration_in_mm,
-            amplitude_contrast_ratio=amplitude_contrast_ratio,
-            phase_shift=phase_shift,
-        ),
+                    ),
         envelope=op.FourierGaussian(b_factor=b_factor, amplitude=ctf_scale_factor),
+        amplitude_contrast_ratio=amplitude_contrast_ratio,
+        phase_shift=phase_shift,
     )
 
-    particle_parameters = ParticleParameters(
+    particle_parameters = RelionParticleParameters(
         instrument_config=instrument_config,
         pose=pose,
         transfer_theory=transfer_theory,
@@ -98,7 +98,7 @@ def build_image_formation_stuff(config):
         # Load atomic structure and transform into a potential
         filename = path_to_models + "/" + pdb_fnames[i]
         atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename,get_b_factors=True
+            filename, loads_b_factors=True
         )
         atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
         potentials.append(atomic_potential)
@@ -128,9 +128,9 @@ def instrument_config_from_params(config):
 
 def build_distribution_from_particle_parameters(
     key: PRNGKeyArray,
-    particle_parameters: ParticleParameters,
+    particle_parameters: RelionParticleParameters,
     args: Any,
-) -> cxs.ContrastImagingPipeline:
+) -> cxs.ContrastImageModel:
     potentials, potential_integrator, structural_weights, variance = args
 
     key, subkey = jax.random.split(key)
@@ -149,7 +149,7 @@ def build_distribution_from_particle_parameters(
         potential_integrator,
         particle_parameters.transfer_theory,
     )
-    imaging_pipeline = cxs.ContrastImagingPipeline(
+    imaging_pipeline = cxs.ContrastImageModel(
         particle_parameters.instrument_config, scattering_theory
     )
     distribution = dist.IndependentGaussianPixels(
@@ -204,7 +204,7 @@ def estimate_signal_variance(
 
 def compute_image_clean(
     key: PRNGKeyArray,
-    particle_parameters: ParticleParameters,
+    particle_parameters: RelionParticleParameters,
     args: Any,
 ):
     key_noise, key_structure = jax.random.split(key)
@@ -215,7 +215,7 @@ def compute_image_clean(
 
 def compute_image_with_noise(
     key: PRNGKeyArray,
-    particle_parameters: ParticleParameters,
+    particle_parameters: RelionParticleParameters,
     args: Any,
 ):
     key_noise, key_structure = jax.random.split(key)
@@ -227,7 +227,7 @@ def compute_image_with_noise(
 
 #### Likelihood Functions
 class CustomJaxDataset(jdl.Dataset):
-    def __init__(self, cryojax_dataset: RelionParticleStackReader):
+    def __init__(self, cryojax_dataset: RelionParticleStackDataset):
         self.cryojax_dataset = cryojax_dataset
 
     def __getitem__(self, index) -> ParticleStack:
@@ -242,7 +242,7 @@ def compute_single_likelihood(
     relion_particle_images_map: ParticleStack,
     relion_particle_images_nomap: ParticleStack,
     args: Any,
-) -> cxs.ContrastImagingPipeline:
+) -> cxs.ContrastImageModel:
     relion_particle_images = eqx.combine(
         relion_particle_images_map, relion_particle_images_nomap
     )
@@ -257,7 +257,7 @@ def compute_single_likelihood(
         potential_integrator,
         relion_particle_images.parameters.transfer_theory,
     )
-    imaging_pipeline = cxs.ContrastImagingPipeline(
+    imaging_pipeline = cxs.ContrastImageModel(
         relion_particle_images.parameters.instrument_config, scattering_theory
     )
     distribution = dist.IndependentGaussianPixels(
