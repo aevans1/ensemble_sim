@@ -16,7 +16,7 @@ authors = [
    { name = "Luke Evans", email = "levans@flatironinstitute.org"}
 ]
 name = "ensemble_sim"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
     "numpy",
     "numpyro",
