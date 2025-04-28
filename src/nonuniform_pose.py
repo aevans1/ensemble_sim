@@ -5,10 +5,11 @@ from dataclasses import dataclass, asdict
 import starfile
 import pandas as pd
 from numpyro import distributions as dist
-import jax.numpy as jnp
 from scipy.spatial.transform import Rotation as R
+import hydra
+from omegaconf import OmegaConf
 
-
+# Function to export to RELION starfile format
 def export_starfile(euler_angles, output_path):
     """
     Save rotation matrices into a RELION-format .star file using starfile.
@@ -25,6 +26,7 @@ def export_starfile(euler_angles, output_path):
     starfile.write(df, output_path)
 
 
+# Function to sample mixture of projected normal distributions
 def sample_mixture_of_projected_normals(rng_key, n, concentration_top, concentration_side, prob_top, prob_side, **kwargs):
     """
     Samples from a mixture of two projected normal distributions, with centers on the unit sphere.
@@ -64,30 +66,44 @@ def sample_mixture_of_projected_normals(rng_key, n, concentration_top, concentra
     return samples
 
 
+# Define the data class for the parameters
 @dataclass
 class MixtureParameters:
     n: int = 1
-    concentration_top: float = 0
-    concentration_side: float = 0
+    concentration_top: float = 0.0
+    concentration_side: float = 0.0
     prob_top: float = 0.5
     prob_side: float = 0.5
     euler_convention: str = 'ZXZ'
     output_path: str = 'nonuniform_pose.star'
 
 
-# Example usage
-def main():
+# Main function wrapped with Hydra
+@hydra.main(config_path="/mnt/home/gwoollard/ceph/repos/ensemble_sim/configs", config_name="pose")
+def main(cfg: MixtureParameters):
     rng_key = random.PRNGKey(42)
-    params = asdict(MixtureParameters())
+    
+    # Convert the parameters to a dictionary and pass to the sampling function
+    params = OmegaConf.to_container(cfg, resolve=True)
     samples = sample_mixture_of_projected_normals(rng_key, **params)
+    
+    # Process the samples into rotation matrices
     rotations = R.from_quat(samples).as_matrix()
-    uniform_in_plane_deg = dist.Uniform(low=-180, high=180).sample(rng_key, sample_shape=(params['n'],))
+    
+    # Sample uniform in-plane rotations
+    uniform_in_plane_deg = dist.Uniform(low=-180, high=180).sample(rng_key, sample_shape=(cfg.n,))
     rotations_in_plane = R.from_euler('z', uniform_in_plane_deg, degrees=True).as_matrix()
-    euler_angles_deg = R.from_matrix(rotations_in_plane @ rotations).as_euler(params['euler_convention'], degrees=True)
-    export_starfile(euler_angles_deg, params['output_path'])
-    return euler_angles_deg
+    
+    # Combine in-plane and out-of-plane rotations
+    euler_angles_deg = R.from_matrix(rotations_in_plane @ rotations).as_euler(cfg.euler_convention, degrees=True)
+    
+    # Export to starfile
+    export_starfile(euler_angles_deg, cfg.output_path)
+    
+    # Print output
+    print("Euler angles in degrees:\n", euler_angles_deg)
+    print(f"Star file saved as '{cfg.output_path}'")
+
 
 if __name__ == "__main__":
-    euler_angles_deg = main()
-    print("Euler angles in degrees:\n", euler_angles_deg)
-    print("Star file saved as 'output_particles.star'")
+    main()
