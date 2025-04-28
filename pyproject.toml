@@ -24,5 +24,8 @@ dependencies = [
     "logging",
     "jax",
     "jax_dataloader",
-    "matplotlib"
+    "matplotlib",
+    "omegaconf",
+    "hydra-core",
+    "scipy",
 ]
