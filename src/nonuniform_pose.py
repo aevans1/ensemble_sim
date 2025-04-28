@@ -79,7 +79,15 @@ class MixtureParameters:
 
 
 # Main function wrapped with Hydra
-@hydra.main(config_path="/mnt/home/gwoollard/ceph/repos/ensemble_sim/configs", config_name="pose")
+import hydra
+from pathlib import Path
+
+# Dynamically set the config path based on repo directory
+repo_root = Path(__file__).parent.parent  # Navigate to repo root (assuming this script is under /src)
+config_path = repo_root / "configs"  # Path to the configs folder
+output_dir = repo_root / "outputs"  # Path to outputs directory
+
+@hydra.main(config_path=str(config_path), config_name="pose")
 def main(cfg: MixtureParameters):
     rng_key = random.PRNGKey(42)
     

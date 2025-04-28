@@ -1,6 +1,9 @@
 # Specific folders in this repo
 figures/
 data/likelihoods/
+*star
+*.ipynb
+.gitignore
 
 # Byte-compiled / optimized / DLL files,...
 __pycache__/
