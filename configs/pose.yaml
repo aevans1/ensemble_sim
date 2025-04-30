@@ -2,7 +2,7 @@
 defaults:
   - _self_
 
-n: 1
+n: 1000
 concentration_top: 0.0
 concentration_side: 0.0
 prob_top: 0.5
