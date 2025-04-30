@@ -49,17 +49,28 @@ def build_image_formation_stuff(config):
     weights = jnp.array(config['weights_models'])
 
     logging.info("Generating potentials...")
-    potential_integrator = cxs.GaussianMixtureProjection()
+    potential_integrator = cxs.FourierSliceExtraction(interpolation_order=1)
     potentials = []
+    voxel_size = config["pixel_size"]
+    box_size = config["box_size"]
     for i in range(len(pdb_fnames)):
 
         # Load atomic structure and transform into a potential
         filename = path_to_models + "/" + pdb_fnames[i]
         atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename, loads_b_factors=True, center=True, select="not elements H"
+            filename, loads_b_factors=True, center=True, select="not element H"
         )
         atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
-        potentials.append(atomic_potential)
+
+        # Convert to a real voxel grid
+        # This step is optional, you could use the atomic potential directly!
+        real_voxel_grid = atomic_potential.as_real_voxel_grid(
+            shape=(box_size, box_size, box_size), voxel_size=voxel_size
+            )
+        potential = cxs.FourierVoxelGridPotential.from_real_voxel_grid(
+                real_voxel_grid, voxel_size, pad_scale=2
+            )
+        potentials.append(potential)
     potentials = tuple(potentials)
     logging.info("...Potentials generated")
 
