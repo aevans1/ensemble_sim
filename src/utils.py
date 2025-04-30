@@ -56,7 +56,7 @@ def build_image_formation_stuff(config):
         # Load atomic structure and transform into a potential
         filename = path_to_models + "/" + pdb_fnames[i]
         atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename, loads_b_factors=True, center=True,
+            filename, loads_b_factors=True, center=True, select="not elements H"
         )
         atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
         potentials.append(atomic_potential)
