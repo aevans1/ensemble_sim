@@ -5,8 +5,9 @@ import logging
 
 from cryojax.io import read_atoms_from_pdb
 from cryojax.data import RelionParticleStackDataset, ParticleStack
-
+from cryojax.constants import get_tabulated_scattering_factor_parameters
 import cryojax.simulator as cxs
+
 
 class CustomJaxDataset(jdl.Dataset):
     """
@@ -57,20 +58,30 @@ def build_image_formation_stuff(config):
 
         # Load atomic structure and transform into a potential
         filename = path_to_models + "/" + pdb_fnames[i]
-        atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename, loads_b_factors=True, center=True, select="not element H"
+        # Load the atomic structure and transform into a potential
+        
+        atom_positions, atom_identities, bfactors = read_atoms_from_pdb(
+            filename, center=True, select="not element H", loads_b_factors=True
         )
-        atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
-
+        scattering_factor_parameters = get_tabulated_scattering_factor_parameters(
+            atom_identities 
+        )
+        atomic_potential = cxs.PengAtomicPotential(
+            atom_positions,
+            scattering_factor_a=scattering_factor_parameters["a"],
+            scattering_factor_b=scattering_factor_parameters["b"],
+            b_factors=bfactors
+        )
         # Convert to a real voxel grid
         # This step is optional, you could use the atomic potential directly!
         real_voxel_grid = atomic_potential.as_real_voxel_grid(
             shape=(box_size, box_size, box_size), voxel_size=voxel_size
-            )
+        )
         potential = cxs.FourierVoxelGridPotential.from_real_voxel_grid(
-                real_voxel_grid, voxel_size, pad_scale=2
-            )
+            real_voxel_grid, voxel_size, pad_scale=2
+        )
         potentials.append(potential)
+
     potentials = tuple(potentials)
     logging.info("...Potentials generated")
 
