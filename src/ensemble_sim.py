@@ -61,7 +61,6 @@ def make_particle_parameters(
     # now generate your non-random values
     spherical_aberration_in_mm = 2.7
     amplitude_contrast_ratio = 0.1
-    b_factor = 0.0
     ctf_scale_factor = 1.0
 
     # ... build the CTF
@@ -72,7 +71,6 @@ def make_particle_parameters(
             astigmatism_angle=astigmatism_angle,
             spherical_aberration_in_mm=spherical_aberration_in_mm,
                     ),
-        envelope=op.FourierGaussian(b_factor=b_factor, amplitude=ctf_scale_factor),
         amplitude_contrast_ratio=amplitude_contrast_ratio,
         phase_shift=phase_shift,
     )
@@ -182,24 +180,24 @@ def estimate_signal_variance(
 
 
 def compute_image_clean(
-    key: PRNGKeyArray,
     particle_parameters: RelionParticleParameters,
-    args: Any,
+    constant_args,
+    key,
 ):
     """
     This is the per-image function for generating clean images, which is then vectorized via another function.
     """
     _, key_structure = jax.random.split(key)
     distribution = build_distribution_from_particle_parameters(
-        key_structure, particle_parameters, args
+        key_structure, particle_parameters, constant_args
     )
     return distribution.compute_signal()
 
 
 def compute_image_with_noise(
-    key: PRNGKeyArray,
     particle_parameters: RelionParticleParameters,
-    args: Any,
+    constant_args,
+    key,
 ):
     """
     This is the per-image function for generating clean images, which is then vectorized via another function.
@@ -208,6 +206,6 @@ def compute_image_with_noise(
     """
     key_noise, key_structure = jax.random.split(key)
     distribution = build_distribution_from_particle_parameters(
-        key_structure, particle_parameters, args
+        key_structure, particle_parameters, constant_args
     )
     return distribution.sample(key_noise)
