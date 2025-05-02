@@ -126,16 +126,20 @@ signal_variance = sim.estimate_signal_variance(
 # # Simulate a dataset!
 # Prep prameters for writing: noise variance, and imaging args
 noise_variance = signal_variance / config["snr"]
-args = (imaging_args["potentials"], 
+constant_args = (imaging_args["potentials"], 
         imaging_args["potential_integrator"], 
         config["weights_models"], 
         noise_variance)
 
+# Generate RNG keys for per-image noise
+keys = jax.random.split(jax.random.PRNGKey(0), number_of_images)
+
 # Simulate and save images to disk as .mrc files
 write_simulated_image_stack_from_starfile(
     param_dataset=parameter_reader,
-    compute_image_fn= sim.compute_image_with_noise,
-    constant_args=args,
+    compute_image_fn=sim.compute_image_with_noise,
+    constant_args=constant_args,
+    per_particle_args=keys,
     is_jittable=True,
     batch_size_per_mrc=100,
     overwrite=True,
