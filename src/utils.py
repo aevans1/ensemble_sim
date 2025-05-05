@@ -50,7 +50,7 @@ def build_image_formation_stuff(config):
     weights = jnp.array(config['weights_models'])
 
     logging.info("Generating potentials...")
-    potential_integrator = cxs.FourierSliceExtraction(interpolation_order=1)
+    potential_integrator = cxs.FourierSliceExtraction()
     potentials = []
     voxel_size = config["pixel_size"]
     box_size = config["box_size"]

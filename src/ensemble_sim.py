@@ -65,7 +65,7 @@ def make_particle_parameters(
 
     # ... build the CTF
     transfer_theory = cxs.ContrastTransferTheory(
-        ctf=cxs.ContrastTransferFunction(
+        ctf=cxs.AberratedAstigmaticCTF(
             defocus_in_angstroms=defocus_in_angstroms,
             astigmatism_in_angstroms=astigmatism_in_angstroms,
             astigmatism_angle=astigmatism_angle,
