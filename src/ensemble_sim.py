@@ -209,3 +209,4 @@ def compute_image_with_noise(
         key_structure, particle_parameters, constant_args
     )
     return distribution.sample(key_noise)
+
