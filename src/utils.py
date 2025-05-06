@@ -61,7 +61,7 @@ def build_image_formation_stuff(config):
         # Load the atomic structure and transform into a potential
         
         atom_positions, atom_identities, bfactors = read_atoms_from_pdb(
-            filename, center=True, select="not element H", loads_b_factors=True
+            filename, center=True, loads_b_factors=True
         )
         scattering_factor_parameters = get_tabulated_scattering_factor_parameters(
             atom_identities 
