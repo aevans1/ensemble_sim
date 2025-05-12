@@ -2,12 +2,12 @@
 defaults:
   - _self_
 
-n: 1000
-concentration_top: 0.0
-concentration_side: 0.0
-prob_top: 0.5
-prob_side: 0.5
-euler_convention: ZXZ
+n: 100000
+concentration_top: 1E6
+concentration_side: 1E6
+prob_top: 0.0
+prob_side: 1.0
+euler_convention: ZYZ
 output_path: nonuniform_pose.star
 
 hydra:
