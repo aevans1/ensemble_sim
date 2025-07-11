@@ -22,7 +22,6 @@ dependencies = [
     "numpyro",
     "equinox",
     "logging",
-    "jax",
     "jax_dataloader",
     "matplotlib"
 ]
