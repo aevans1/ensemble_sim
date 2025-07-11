@@ -4,7 +4,8 @@ import jax_dataloader as jdl
 import logging
 
 from cryojax.io import read_atoms_from_pdb
-from cryojax.data import RelionParticleStackDataset, ParticleStack
+from cryojax.data import RelionParticleStackDataset
+from cryojax.constants import get_tabulated_scattering_factor_parameters
 
 import cryojax.simulator as cxs
 
@@ -15,7 +16,7 @@ class CustomJaxDataset(jdl.Dataset):
     def __init__(self, cryojax_dataset: RelionParticleStackDataset):
         self.cryojax_dataset = cryojax_dataset
 
-    def __getitem__(self, index) -> ParticleStack:
+    def __getitem__(self, index):
         return self.cryojax_dataset[index]
 
     def __len__(self) -> int:
@@ -56,9 +57,17 @@ def build_image_formation_stuff(config):
         # Load atomic structure and transform into a potential
         filename = path_to_models + "/" + pdb_fnames[i]
         atom_positions, atom_identities, b_factors = read_atoms_from_pdb(
-            filename, loads_b_factors=True, center=True,
+            filename, loads_b_factors=True, center=True, selection_string="not element H"
         )
-        atomic_potential = cxs.PengAtomicPotential(atom_positions, atom_identities, b_factors)
+        scattering_factor_parameters = get_tabulated_scattering_factor_parameters(
+            atom_identities
+        )
+        atomic_potential = cxs.PengAtomicPotential(
+            atom_positions,
+            scattering_factor_a=scattering_factor_parameters["a"],
+            scattering_factor_b=scattering_factor_parameters["b"],
+            b_factors=b_factors,
+        )
         potentials.append(atomic_potential)
     potentials = tuple(potentials)
     logging.info("...Potentials generated")
