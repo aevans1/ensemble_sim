@@ -1,0 +1,42 @@
+size_of_dataset:
+  number_of_images: 30000
+  image_per_file: 5000
+  image_batch_size: 1000
+
+pdb_fname: ???
+output_paths:
+  image_dir: ???
+  path_to_volume: null
+  path_to_starfile: ???
+
+snr: ???
+
+mask:
+  rolloff_width: 0.0
+
+pose:
+  shift:
+    minval: -0.02
+    maxval: 0.02
+  rotation:
+    parametrization: s3
+    concentration_top: ???
+    concentration_side: ???
+    prob_top: ???
+
+microscope:
+  voltage_in_kilovolts: 300
+  spherical_aberration_in_mm: 2.7
+  amplitude_contrast_ratio: 0.1
+  pixel_size: 1.2
+  pad_scale: 1.0
+  shape:
+    height: 256
+    width: ${microscope.shape.height}
+  ctf:
+    defocus:
+      minval: 10000
+      maxval: 20000
+    astigmatism:
+      minval: 0
+      maxval: 100

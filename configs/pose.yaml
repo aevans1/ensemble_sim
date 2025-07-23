@@ -2,6 +2,10 @@
 defaults:
   - _self_
 
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d_%H-%M-%S}
+
 n: 1
 concentration_top: 0.0
 concentration_side: 0.0
@@ -10,6 +14,3 @@ prob_side: 0.5
 euler_convention: ZXZ
 output_path: nonuniform_pose.star
 
-hydra:
-  run:
-    dir: outputs/${now:%Y-%m-%d_%H-%M-%S}
