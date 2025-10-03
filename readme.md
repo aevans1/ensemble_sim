@@ -2,22 +2,12 @@ NOTE: The existing code in `src/ensemble_sim.py` is largely adapted directly fro
 
 
 There is a .toml file with dependencies, but some things should be installed from source:
-- `cryojax` should be installed from source, [here](https://github.com/mjo22/cryojax)
-- follow instructions there on what jax to install
-- probably other things! 
+- [jax](https://docs.jax.dev/en/latest/installation.html)
+  - note: for gpu, so far its expected this is cuda12, so use `pip install -U "jax[cuda12]"`
 
 You can try getting the other packages, and installing project, via:
-
 ```
 git clone https://github.com/aevans1/ensemble_sim
 cd ensemble_sim
 python -m pip install .
 ```
-
-For the source estimation notebook, you will also need the "cryo_reweighting" package, or implement the short functions in there yourself, see [here](https://github.com/Quantitative-Heterogeneity/cryo_reweighting/blob/main/src/cryo_reweighting/optimization.py)
-```
-git clone https://github.com/Quantitative-Heterogeneity/cryo_reweighting.git
-cd cryo_reweighting
-python -m pip install .
-```
-
