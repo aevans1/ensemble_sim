@@ -1,4 +1,4 @@
-NOTE: The existing code in `src/ensemble_sim.py` is largely adapted directly from the cryojax tutorial [here](https://github.com/mjo22/cryojax/blob/340-write-an-ensemble-reweighting-tutorial/docs/examples/simulating-and-reweighting-ensembles.ipynb)
+NOTE: The existing code in `src/ensemble_sim.py` is largely adapted directly from the cryojax tutorial [here](https://github.com/michael-0brien/cryojax/blob/main/docs/examples/dev/simulating-and-reweighting-ensembles.ipynb)
 
 
 There is a .toml file with dependencies, but some things should be installed from source:
