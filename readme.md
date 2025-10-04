@@ -12,3 +12,5 @@ git clone https://github.com/aevans1/ensemble_sim
 cd ensemble_sim
 python -m pip install .
 ```
+
+The .toml installs `cryojax` version 0.4.0 from `pip`, in the future this repo will be updated for later versions of cryojax but for now only works for version 0.4.0.
